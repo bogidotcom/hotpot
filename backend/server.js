@@ -517,7 +517,7 @@ app.post('/api/vpn/netsepio/connect', async (req, res) => {
     const subRes  = await fetch(`${NETSEPIO_BASE}/subscription/erebrus?walletAddress=${walletAddress}&chain=sol`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body:    JSON.stringify({}),
+      body:    JSON.stringify({ wallet: walletAddress }),
     });
     const subData = await subRes.json().catch(() => ({}));
 
