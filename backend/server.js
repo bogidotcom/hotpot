@@ -514,9 +514,10 @@ app.post('/api/vpn/netsepio/connect', async (req, res) => {
     if (!token) throw new Error('No token in NetSepio auth response');
 
     // Subscribe → receive Erebrus WireGuard credentials
-    const subRes  = await fetch(`${NETSEPIO_BASE}/subscription/erebrus`, {
+    const subRes  = await fetch(`${NETSEPIO_BASE}/subscription/erebrus?walletAddress=${walletAddress}&chain=sol`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body:    JSON.stringify({}),
     });
     const subData = await subRes.json().catch(() => ({}));
 
