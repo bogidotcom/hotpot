@@ -11,6 +11,7 @@ const { v4: uuidv4 } = require('uuid');
 dotenv.config()
 
 const app  = express();
+app.set('trust proxy', 1); // trust first proxy (nginx) so X-Forwarded-For is used for client IP
 const PORT = process.env.PORT || 3000;
 
 console.log(process.env)
@@ -470,14 +471,13 @@ app.get('/api/vpn/netsepio/flowid', async (req, res) => {
   if (!walletAddress) return res.status(400).json({ error: 'walletAddress required' });
 
   try {
-    const hexAddr = '0x' + Buffer.from(new PublicKey(walletAddress).toBytes()).toString('hex');
-    const r       = await fetch(`${NETSEPIO_BASE}/flowid?walletAddress=${hexAddr}`);
+    const r = await fetch(`${NETSEPIO_BASE}/flowid?walletAddress=${walletAddress}&chain=sol`);
     if (!r.ok) throw new Error(`NetSepio flowid: ${r.status}`);
 
     const data   = await r.json();
     const flowId = data.payload?.flowId || data.flowId;
     const eula   = data.payload?.eula   || data.eula || '';
-    res.json({ flowId, eula, hexWalletAddress: hexAddr });
+    res.json({ flowId, eula, walletAddress });
   } catch (err) {
     console.error('[NetSepio FlowID]', err.message);
     res.status(500).json({ error: err.message });
@@ -489,9 +489,9 @@ app.get('/api/vpn/netsepio/flowid', async (req, res) => {
  * Returns a WireGuard .conf string ready for use by the in-app VPN service.
  */
 app.post('/api/vpn/netsepio/connect', async (req, res) => {
-  const { deviceId, flowId, signature, pubKey } = req.body;
-  if (!deviceId || !flowId || !signature || !pubKey) {
-    return res.status(400).json({ error: 'deviceId, flowId, signature and pubKey are required' });
+  const { deviceId, flowId, signature, pubKey, walletAddress, message } = req.body;
+  if (!deviceId || !flowId || !signature || !pubKey || !walletAddress || !message) {
+    return res.status(400).json({ error: 'deviceId, flowId, signature, pubKey, walletAddress and message are required' });
   }
 
   const dev = getDeviceDB(deviceId);
@@ -499,10 +499,10 @@ app.post('/api/vpn/netsepio/connect', async (req, res) => {
 
   try {
     // Authenticate → receive a PASETO bearer token
-    const authRes = await fetch(`${NETSEPIO_BASE}/authenticate`, {
+    const authRes = await fetch(`${NETSEPIO_BASE}/authenticate?walletAddress=${walletAddress}&chain=sol`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ flowId, signature, pubKey }),
+      body:    JSON.stringify({ flowId, signature, pubKey, walletAddress, message, chainName: 'sol' }),
     });
     if (!authRes.ok) {
       const body = await authRes.json().catch(() => ({}));
