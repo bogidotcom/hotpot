@@ -513,6 +513,10 @@ app.post('/api/vpn/netsepio/connect', async (req, res) => {
     const token    = authData.payload?.token || authData.token;
     if (!token) throw new Error('No token in NetSepio auth response');
 
+    // Store the token for future API calls
+    dev.token = token;
+    saveDB(db);
+
     // Subscribe → receive Erebrus WireGuard credentials
     const subRes  = await fetch(`${NETSEPIO_BASE}/subscription/erebrus?walletAddress=${walletAddress}&chain=sol`, {
       method:  'POST',
@@ -535,6 +539,175 @@ app.post('/api/vpn/netsepio/connect', async (req, res) => {
     res.json({ success: true, wgConfig, balance: dev.balance, protocol: 'wireguard' });
   } catch (err) {
     console.error('[NetSepio Connect]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get NetSepio subscription status.
+ */
+app.get('/api/vpn/netsepio/subscription', async (req, res) => {
+  const { deviceId } = req.query;
+  if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
+
+  const dev = getDeviceDB(deviceId);
+  if (!dev.token) return res.status(401).json({ error: 'Not authenticated with NetSepio' });
+
+  try {
+    const r = await fetch(`${NETSEPIO_BASE}/subscription`, {
+      headers: { 'Authorization': `Bearer ${dev.token}` },
+    });
+    if (!r.ok) throw new Error(`NetSepio subscription: ${r.status}`);
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[NetSepio Subscription]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Start NetSepio trial subscription.
+ */
+app.post('/api/vpn/netsepio/subscription/trial', async (req, res) => {
+  const { deviceId } = req.body;
+  if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
+
+  const dev = getDeviceDB(deviceId);
+  if (!dev.token) return res.status(401).json({ error: 'Not authenticated with NetSepio' });
+
+  try {
+    const r = await fetch(`${NETSEPIO_BASE}/subscription/trial`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${dev.token}`, 'Content-Type': 'application/json' },
+    });
+    if (!r.ok) throw new Error(`NetSepio trial: ${r.status}`);
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[NetSepio Trial]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get NetSepio nodes for regions.
+ */
+app.get('/api/vpn/netsepio/nodes', async (req, res) => {
+  const { deviceId } = req.query;
+  if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
+
+  const dev = getDeviceDB(deviceId);
+  if (!dev.token) return res.status(401).json({ error: 'Not authenticated with NetSepio' });
+
+  try {
+    const r = await fetch(`${NETSEPIO_BASE}/nodes/all`, {
+      headers: { 'Authorization': `Bearer ${dev.token}` },
+    });
+    if (!r.ok) throw new Error(`NetSepio nodes: ${r.status}`);
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[NetSepio Nodes]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Create Erebrus VPN client.
+ */
+app.post('/api/vpn/netsepio/client/:region', async (req, res) => {
+  const { region } = req.params;
+  const { deviceId, name, presharedKey, publicKey } = req.body;
+  if (!deviceId || !name || !presharedKey || !publicKey) {
+    return res.status(400).json({ error: 'deviceId, name, presharedKey, publicKey required' });
+  }
+
+  const dev = getDeviceDB(deviceId);
+  if (!dev.token) return res.status(401).json({ error: 'Not authenticated with NetSepio' });
+
+  try {
+    const r = await fetch(`${NETSEPIO_BASE}/erebrus/client/${region}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${dev.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, presharedKey, publicKey }),
+    });
+    if (!r.ok) throw new Error(`NetSepio create client: ${r.status}`);
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[NetSepio Create Client]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get Erebrus VPN clients.
+ */
+app.get('/api/vpn/netsepio/clients', async (req, res) => {
+  const { deviceId } = req.query;
+  if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
+
+  const dev = getDeviceDB(deviceId);
+  if (!dev.token) return res.status(401).json({ error: 'Not authenticated with NetSepio' });
+
+  try {
+    const r = await fetch(`${NETSEPIO_BASE}/erebrus/clients`, {
+      headers: { 'Authorization': `Bearer ${dev.token}` },
+    });
+    if (!r.ok) throw new Error(`NetSepio clients: ${r.status}`);
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[NetSepio Clients]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get client blobId for config download.
+ */
+app.get('/api/vpn/netsepio/client/:uuid/blobId', async (req, res) => {
+  const { uuid } = req.params;
+  const { deviceId } = req.query;
+  if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
+
+  const dev = getDeviceDB(deviceId);
+  if (!dev.token) return res.status(401).json({ error: 'Not authenticated with NetSepio' });
+
+  try {
+    const r = await fetch(`${NETSEPIO_BASE}/erebrus/client/${uuid}/blobId`, {
+      headers: { 'Authorization': `Bearer ${dev.token}` },
+    });
+    if (!r.ok) throw new Error(`NetSepio blobId: ${r.status}`);
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[NetSepio BlobId]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete Erebrus VPN client.
+ */
+app.delete('/api/vpn/netsepio/client/:uuid', async (req, res) => {
+  const { uuid } = req.params;
+  const { deviceId } = req.query;
+  if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
+
+  const dev = getDeviceDB(deviceId);
+  if (!dev.token) return res.status(401).json({ error: 'Not authenticated with NetSepio' });
+
+  try {
+    const r = await fetch(`${NETSEPIO_BASE}/erebrus/client/${uuid}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${dev.token}` },
+    });
+    if (!r.ok) throw new Error(`NetSepio delete client: ${r.status}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[NetSepio Delete Client]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
