@@ -193,6 +193,79 @@ export async function connectVpnNetSepio(deviceId, flowId, signature, pubKey, wa
   return res.json();
 }
 
+/**
+ * Get NetSepio subscription status.
+ */
+export async function getNetSepioSubscription(deviceId) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/vpn/netsepio/subscription?deviceId=${deviceId}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+/**
+ * Start NetSepio trial subscription.
+ */
+export async function startNetSepioTrial(deviceId) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/vpn/netsepio/subscription/trial`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+/**
+ * Get NetSepio nodes.
+ */
+export async function getNetSepioNodes(deviceId) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/vpn/netsepio/nodes?deviceId=${deviceId}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+/**
+ * Create Erebrus VPN client.
+ */
+export async function createNetSepioClient(deviceId, region, name, presharedKey, publicKey) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/vpn/netsepio/client/${region}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, name, presharedKey, publicKey }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+/**
+ * Get Erebrus VPN clients.
+ */
+export async function getNetSepioClients(deviceId) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/vpn/netsepio/clients?deviceId=${deviceId}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+/**
+ * Get client blobId.
+ */
+export async function getNetSepioClientBlobId(deviceId, uuid) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/vpn/netsepio/client/${uuid}/blobId?deviceId=${deviceId}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+/**
+ * Delete Erebrus VPN client.
+ */
+export async function deleteNetSepioClient(deviceId, uuid) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/vpn/netsepio/client/${uuid}?deviceId=${deviceId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 // ── Hotspot hosting ───────────────────────────────────────────────────────────
 
 export async function reportSpeed(deviceId, speed) {

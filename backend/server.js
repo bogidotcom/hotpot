@@ -518,7 +518,7 @@ app.post('/api/vpn/netsepio/connect', async (req, res) => {
     saveDB(db);
 
     // Subscribe → receive Erebrus WireGuard credentials
-    const subRes  = await fetch(`${NETSEPIO_BASE}/subscription/erebrus?walletAddress=${walletAddress}&chain=sol`, {
+    const subRes  = await fetch(`${NETSEPIO_BASE}/subscription/trial?walletAddress=${walletAddress}&chain=sol`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body:    JSON.stringify({ wallet: walletAddress }),
