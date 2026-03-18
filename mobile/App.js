@@ -3,6 +3,7 @@ import { View, TouchableOpacity, Text, StyleSheet, Platform } from 'react-native
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import ConnectScreen from './src/screens/ConnectScreen';
 import HostScreen from './src/screens/HostScreen';
+import MapScreen from './src/screens/MapScreen';
 import { WalletProvider } from './src/utils/WalletContext';
 
 export default function App() {
@@ -13,10 +14,12 @@ export default function App() {
       <WalletProvider>
         <SafeAreaView style={styles.container} edges={['top']}>
           <View style={styles.main}>
-            {activeTab === 'connect' ? <ConnectScreen /> : <HostScreen />}
+            {activeTab === 'connect' && <ConnectScreen />}
+            {activeTab === 'host'    && <HostScreen />}
+            {activeTab === 'map'     && <MapScreen />}
           </View>
 
-          {/* Tab bar sits above Android nav bar */}
+          {/* Tab bar */}
           <View style={[styles.tabBar, Platform.OS === 'android' && styles.tabBarAndroid]}>
             <TouchableOpacity
               style={[styles.tab, activeTab === 'connect' && styles.activeTab]}
@@ -24,6 +27,14 @@ export default function App() {
             >
               <Text style={styles.tabIcon}>⚡</Text>
               <Text style={[styles.tabText, activeTab === 'connect' && styles.activeTabText]}>Connect</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.tab, activeTab === 'map' && styles.activeTab]}
+              onPress={() => setActiveTab('map')}
+            >
+              <Text style={styles.tabIcon}>🗺️</Text>
+              <Text style={[styles.tabText, activeTab === 'map' && styles.activeTabText]}>Map</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -57,9 +68,8 @@ const styles = StyleSheet.create({
     paddingBottom: 50,
   },
   tabBarAndroid: {
-    paddingBottom: 8,
-    height: 110,
     paddingBottom: 50,
+    height: 110,
   },
   tab: {
     flex: 1,

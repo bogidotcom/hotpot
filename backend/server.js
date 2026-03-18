@@ -402,9 +402,13 @@ app.post('/api/hotspot/settings', async (req, res) => {
 
   db.hostSettings[deviceId] = {
     networks: networks.map(n => ({
-      ssid:       n.ssid,
-      password:   n.password,
-      encryption: n.encryption || 'WPA2',
+      ssid:        n.ssid,
+      password:    n.password,
+      encryption:  n.encryption || 'WPA2',
+      country:     n.country     || resolvedCountry || 'Unknown',
+      countryCode: (n.countryCode || resolvedCC || 'XX').toUpperCase(),
+      lat:         typeof n.lat === 'number' ? n.lat : null,
+      lon:         typeof n.lon === 'number' ? n.lon : null,
     })),
     country:     resolvedCountry || 'Unknown',
     countryCode: resolvedCC      || 'XX',
@@ -844,19 +848,23 @@ app.get('/api/config/json', (_req, res) => {
 
   // Dynamic hotspots registered by hosts
   for (const [deviceId, settings] of Object.entries(db.hostSettings)) {
-    if (countryFilter && settings.countryCode !== countryFilter) continue;
     const hostNets   = settings.networks || (settings.ssid ? [{ ssid: settings.ssid, password: settings.password, encryption: 'WPA2' }] : []);
     const hostWallet = db.devices?.[deviceId]?.walletAddress || null;
     for (const n of hostNets) {
+      const netCountry = n.country     || settings.country     || 'Unknown';
+      const netCC      = n.countryCode || settings.countryCode || 'XX';
+      if (countryFilter && netCC.toUpperCase() !== countryFilter) continue;
       networks.push({
-        ssid:        n.ssid,
-        password:    n.password,
-        encryption:  n.encryption || 'WPA2',
-        autoJoin:    true,
+        ssid:         n.ssid,
+        password:     n.password,
+        encryption:   n.encryption || 'WPA2',
+        autoJoin:     true,
         deviceId,
         walletAddress: hostWallet,
-        country:     settings.country,
-        countryCode: settings.countryCode,
+        country:      netCountry,
+        countryCode:  netCC,
+        lat:          typeof n.lat === 'number' ? n.lat : null,
+        lon:          typeof n.lon === 'number' ? n.lon : null,
       });
     }
   }

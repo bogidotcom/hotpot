@@ -56,3 +56,19 @@ export function onVpnStatusChange(callback) {
   const subscription = emitter.addListener('WireGuardStatus', callback);
   return () => subscription.remove();
 }
+
+/**
+ * Returns cumulative WireGuard traffic statistics for the active tunnel.
+ * Shape: { rxBytes, txBytes, totalBytes, totalGB }
+ * All values are 0 when no tunnel is active or on non-Android platforms.
+ */
+export async function getVpnTrafficStats() {
+  if (Platform.OS !== 'android' || !WireGuardModule) {
+    return { rxBytes: 0, txBytes: 0, totalBytes: 0, totalGB: 0 };
+  }
+  try {
+    return await WireGuardModule.getTrafficStats();
+  } catch {
+    return { rxBytes: 0, txBytes: 0, totalBytes: 0, totalGB: 0 };
+  }
+}

@@ -33,7 +33,7 @@ import {
 } from '../services/api';
 import { useWallet } from '../utils/WalletContext';
 import {
-  connectVpn, disconnectVpn, onVpnStatusChange,
+  connectVpn, disconnectVpn, onVpnStatusChange, getVpnTrafficStats,
 } from '../utils/VpnManager';
 
 const TREASURY_WALLET = '6bvB3PTz48wozyPJeuTB77axexWu9MfUSjBYbQzEgK88';
@@ -89,7 +89,8 @@ export default function ConnectScreen() {
     usdPerGb: 0.1,
   });
   const [asxPerGb, setAsxPerGb] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);       // "Dip In" button
+  const [vpnLoading, setVpnLoading] = useState(false); // VPN button
   const [walletConnecting, setWalletConnecting] = useState(false);
   const [connected, setConnected] = useState(false);
   const [vpnConnected, setVpnConnected] = useState(false);
@@ -133,8 +134,10 @@ export default function ConnectScreen() {
   const [qrNetwork, setQrNetwork] = useState(null); // { ssid, password, encryption }
   const [qrAllNetworks, setQrAllNetworks] = useState([]); // paginated "add all" QR flow
   const [qrAllIndex, setQrAllIndex] = useState(0);
-  const deviceIdRef = useRef(null);
-  const vpnDataGBRef = useRef(0);
+  const deviceIdRef    = useRef(null);
+  const vpnDataGBRef   = useRef(0);
+  /** Cumulative GB as of the last billing tick — used to compute the delta. */
+  const lastTotalGBRef = useRef(0);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -204,28 +207,39 @@ export default function ConnectScreen() {
     };
   }, [loadStats, sendPing, loadAsxRate]);
 
-  // Simulate VPN usage and bill to backend
+  // Bill VPN usage based on real WireGuard traffic bytes (polled every 5 s).
   useEffect(() => {
-    let interval;
-    if (vpnConnected) {
-      interval = setInterval(async () => {
-        const incrementGB = 0.5;
-        const cost = incrementGB * asxPerGb;
-        if (asxBalance < cost) {
-          setVpnConnected(false);
-          // Record disconnect session
-          reportVpnDisconnect(deviceIdRef.current, vpnDataGBRef.current, null, null).catch(console.warn);
-          Alert.alert('Balance Empty', 'Your ASX balance is too low. Please top up.');
-          return;
-        }
-        vpnDataGBRef.current += incrementGB;
-        setVpnDataGB(vpnDataGBRef.current);
-        try {
-          const res = await reportVpnUsage(deviceIdRef.current, incrementGB);
-          if (res.success) setAsxBalance(res.balance);
-        } catch {}
-      }, 5000);
-    }
+    if (!vpnConnected) return;
+    lastTotalGBRef.current = 0; // reset per session
+
+    const interval = setInterval(async () => {
+      const stats = await getVpnTrafficStats();
+      const currentGB = stats.totalGB ?? 0;
+      const deltaGB   = Math.max(0, currentGB - lastTotalGBRef.current);
+      lastTotalGBRef.current = currentGB;
+
+      // Always update displayed counter
+      vpnDataGBRef.current = currentGB;
+      setVpnDataGB(currentGB);
+
+      if (deltaGB <= 0) return; // no new traffic this tick
+
+      // Check balance before billing
+      const cost = deltaGB * asxPerGb;
+      if (asxBalance < cost) {
+        setVpnConnected(false);
+        disconnectVpn();
+        reportVpnDisconnect(deviceIdRef.current, vpnDataGBRef.current, null, null).catch(console.warn);
+        Alert.alert('Balance Empty', 'Your ASX balance is too low. Please top up.');
+        return;
+      }
+
+      try {
+        const res = await reportVpnUsage(deviceIdRef.current, deltaGB);
+        if (res.success) setAsxBalance(res.balance);
+      } catch {}
+    }, 5000);
+
     return () => clearInterval(interval);
   }, [vpnConnected, asxBalance, asxPerGb]);
 
@@ -424,31 +438,34 @@ export default function ConnectScreen() {
     setQrAllIndex(0);
   };
 
-  // Subscribe to VPN status events from the native service
+  // Subscribe to VPN status events from the native service.
+  // Empty deps — subscribe once on mount so the listener is never torn down
+  // mid-connection (which would cause the loading state to get stuck).
   useEffect(() => {
     const unsub = onVpnStatusChange((status) => {
       if (status === 'CONNECTED') {
-        vpnDataGBRef.current = 0;
+        vpnDataGBRef.current   = 0;
+        lastTotalGBRef.current = 0;
         setVpnConnected(true);
         setVpnDataGB(0);
-        setLoading(false);
+        setVpnLoading(false);
       } else if (status === 'DISCONNECTED') {
-        if (vpnConnected) {
-          reportVpnDisconnect(deviceIdRef.current, vpnDataGBRef.current, null, null).catch(console.warn);
-        }
+        // Always report — this callback only fires when the service stops
+        reportVpnDisconnect(deviceIdRef.current, vpnDataGBRef.current, null, null).catch(console.warn);
         setVpnConnected(false);
-        vpnDataGBRef.current = 0;
+        vpnDataGBRef.current   = 0;
+        lastTotalGBRef.current = 0;
         setVpnDataGB(0);
-        setLoading(false);
+        setVpnLoading(false);
       } else if (status?.startsWith('ERROR:')) {
         const msg = status.slice(6) || 'VPN error';
         Alert.alert('VPN Failed', msg);
         setVpnConnected(false);
-        setLoading(false);
+        setVpnLoading(false);
       }
     });
     return unsub;
-  }, [vpnConnected]);
+  }, []);
 
   const handleVpnConnect = async () => {
     // If already connected → disconnect
@@ -466,7 +483,7 @@ export default function ConnectScreen() {
       return;
     }
 
-    setLoading(true);
+    setVpnLoading(true);
     try {
       // 1. Get NetSepio flow ID + EULA for this wallet
       const { flowId, eula } = await getNetSepioFlowId(walletAddress);
@@ -487,12 +504,20 @@ export default function ConnectScreen() {
         throw new Error('No WireGuard config returned from Erebrus.');
       }
 
-      // 4. Start in-app WireGuard tunnel (loading stays true until CONNECTED event)
+      // 4. Start in-app WireGuard tunnel.
+      // connectVpn() awaits the native promise, which is resolved only after the
+      // CONNECTED broadcast arrives — so the tunnel is already UP when we return.
       const result = await connectVpn(credData.wgConfig);
       if (!result.success) {
         throw new Error(result.error || 'Failed to start VPN service.');
       }
-      // Native service is now starting — CONNECTED/ERROR event will arrive via onVpnStatusChange
+      // Belt-and-suspenders: set state here in case the JS event was missed
+      // (e.g. rapid re-subscribe during VPN permission dialog lifecycle).
+      vpnDataGBRef.current   = 0;
+      lastTotalGBRef.current = 0;
+      setVpnConnected(true);
+      setVpnDataGB(0);
+      setVpnLoading(false);
     } catch (e) {
       const isCancelled =
         (e.message || '').includes('CancellationException') ||
@@ -503,7 +528,7 @@ export default function ConnectScreen() {
         ? 'Signing cancelled. Please try again.'
         : (e.message || 'Could not connect to VPN.');
       Alert.alert('VPN Failed', msg);
-      setLoading(false);
+      setVpnLoading(false);
     }
   };
 
@@ -649,10 +674,10 @@ export default function ConnectScreen() {
             <TouchableOpacity
               style={[styles.connectButton, styles.vpnButton, vpnConnected && styles.vpnConnectedButton]}
               onPress={handleVpnConnect}
-              disabled={loading}
+              disabled={vpnLoading}
               activeOpacity={0.85}
             >
-              {loading
+              {vpnLoading
                 ? <ActivityIndicator color="#fff" size="large" />
                 : <>
                     <Text style={styles.connectIcon}>{vpnConnected ? '🔒' : '🔓'}</Text>

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,16 +11,17 @@ import {
   TextInput,
   ActivityIndicator,
   Platform,
+  Modal,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
+import * as Location from 'expo-location';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { updateHostSettings, geolocateSelf } from '../services/api';
+import { updateHostSettings } from '../services/api';
 import { useWallet } from '../utils/WalletContext';
 
 const TREASURY_WALLET = '6bvB3PTz48wozyPJeuTB77axexWu9MfUSjBYbQzEgK88';
 const PUBLISH_FEE_ASX = 100_000;
-
-const { width } = require('react-native').Dimensions.get('window');
 
 function getDeviceId() {
   return (
@@ -30,6 +31,190 @@ function getDeviceId() {
 }
 
 const ENCRYPTION_OPTIONS = ['WPA2', 'WPA3', 'WEP', 'Open'];
+
+// ── Inline Leaflet map HTML ───────────────────────────────────────────────────
+
+function buildMapHtml(initialLat, initialLon, markerLat, markerLon) {
+  const lat = initialLat || 20;
+  const lon = initialLon || 0;
+  const zoom = initialLat ? 13 : 2;
+  const markerJs = (markerLat && markerLon)
+    ? `addMarker(${markerLat}, ${markerLon});`
+    : '';
+  return `<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
+<style>html,body,#map{margin:0;padding:0;width:100%;height:100%;background:#111}
+#hint{position:absolute;top:10px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,0.75);color:#fff;padding:8px 16px;border-radius:20px;
+  font-size:13px;z-index:999;pointer-events:none;white-space:nowrap;}
+#confirm{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
+  background:#ff2a2a;color:#fff;padding:12px 32px;border-radius:24px;
+  font-size:15px;font-weight:bold;z-index:999;border:none;cursor:pointer;display:none;}
+</style></head>
+<body>
+<div id="hint">Tap on the map to mark WiFi location</div>
+<button id="confirm" onclick="confirmLocation()">Confirm Location ✓</button>
+<div id="map"></div>
+<script>
+var map = L.map('map').setView([${lat},${lon}],${zoom});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  attribution:'© OpenStreetMap',maxZoom:19}).addTo(map);
+var marker=null;
+function addMarker(lat,lon){
+  if(marker)map.removeLayer(marker);
+  marker=L.marker([lat,lon]).addTo(map);
+  document.getElementById('confirm').style.display='block';
+}
+map.on('click',function(e){addMarker(e.latlng.lat,e.latlng.lng);});
+function confirmLocation(){
+  if(!marker)return;
+  var ll=marker.getLatLng();
+  window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(
+    JSON.stringify({type:'location',lat:ll.lat,lon:ll.lng}));
+}
+${markerJs}
+// Try to get GPS location and center map
+if(navigator.geolocation){
+  navigator.geolocation.getCurrentPosition(function(p){
+    if(!marker)map.setView([p.coords.latitude,p.coords.longitude],14);
+    window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(
+      JSON.stringify({type:'gps',lat:p.coords.latitude,lon:p.coords.longitude}));
+  },function(){},{enableHighAccuracy:true,timeout:8000});
+}
+<\/script></body></html>`;
+}
+
+// ── Per-network location picker component ─────────────────────────────────────
+
+function LocationPicker({ network, onChange }) {
+  const [mapVisible, setMapVisible] = useState(false);
+  const [liveTracking, setLiveTracking] = useState(false);
+  const liveSubRef = useRef(null);
+  const webviewRef = useRef(null);
+
+  const stopLive = useCallback(() => {
+    if (liveSubRef.current) {
+      liveSubRef.current.remove();
+      liveSubRef.current = null;
+    }
+    setLiveTracking(false);
+  }, []);
+
+  const toggleLive = useCallback(async () => {
+    if (liveTracking) { stopLive(); return; }
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Denied', 'Location permission is required for live tracking.');
+      return;
+    }
+    setLiveTracking(true);
+    const sub = await Location.watchPositionAsync(
+      { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 5 },
+      (pos) => {
+        const { latitude: lat, longitude: lon } = pos.coords;
+        onChange({ ...network, lat, lon });
+      }
+    );
+    liveSubRef.current = sub;
+  }, [liveTracking, network, onChange, stopLive]);
+
+  // Clean up live tracking when component unmounts
+  useEffect(() => () => stopLive(), [stopLive]);
+
+  const handleWebViewMessage = useCallback((event) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === 'location') {
+        onChange({ ...network, lat: msg.lat, lon: msg.lon });
+        setMapVisible(false);
+      }
+    } catch {}
+  }, [network, onChange]);
+
+  const hasLocation = network.lat && network.lon;
+
+  return (
+    <View style={locStyles.container}>
+      <Text style={locStyles.label}>LOCATION</Text>
+      <View style={locStyles.row}>
+        <TouchableOpacity
+          style={locStyles.locateBtn}
+          onPress={() => setMapVisible(true)}
+        >
+          <Text style={locStyles.locateBtnText}>📍 Locate on Map</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[locStyles.liveBtn, liveTracking && locStyles.liveBtnActive]}
+          onPress={toggleLive}
+        >
+          <Text style={[locStyles.liveBtnText, liveTracking && locStyles.liveBtnTextActive]}>
+            {liveTracking ? '⏹ Stop Live' : '🛰 Share Live'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+      {hasLocation && (
+        <Text style={locStyles.coordText}>
+          📌 {network.lat.toFixed(5)}, {network.lon.toFixed(5)}
+        </Text>
+      )}
+
+      {/* Map picker modal */}
+      <Modal visible={mapVisible} animationType="slide" onRequestClose={() => setMapVisible(false)}>
+        <View style={locStyles.mapModal}>
+          <View style={locStyles.mapHeader}>
+            <Text style={locStyles.mapTitle}>Mark WiFi Location</Text>
+            <TouchableOpacity onPress={() => setMapVisible(false)} style={locStyles.mapClose}>
+              <Text style={locStyles.mapCloseText}>✕ Close</Text>
+            </TouchableOpacity>
+          </View>
+          <WebView
+            ref={webviewRef}
+            style={{ flex: 1 }}
+            source={{ html: buildMapHtml(network.lat, network.lon, network.lat, network.lon) }}
+            onMessage={handleWebViewMessage}
+            javaScriptEnabled
+            geolocationEnabled
+          />
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const locStyles = StyleSheet.create({
+  container: { marginTop: 10 },
+  label: { color: '#ff9f1c', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 6 },
+  row: { flexDirection: 'row', gap: 8 },
+  locateBtn: {
+    flex: 1, backgroundColor: 'rgba(255,42,42,0.15)', paddingVertical: 10,
+    paddingHorizontal: 12, borderRadius: 10, borderWidth: 1,
+    borderColor: 'rgba(255,42,42,0.4)', alignItems: 'center',
+  },
+  locateBtnText: { color: '#ff6666', fontWeight: '800', fontSize: 12 },
+  liveBtn: {
+    flex: 1, backgroundColor: 'rgba(255,159,28,0.1)', paddingVertical: 10,
+    paddingHorizontal: 12, borderRadius: 10, borderWidth: 1,
+    borderColor: 'rgba(255,159,28,0.3)', alignItems: 'center',
+  },
+  liveBtnActive: { backgroundColor: 'rgba(255,42,42,0.25)', borderColor: '#ff2a2a' },
+  liveBtnText: { color: '#ff9f1c', fontWeight: '800', fontSize: 12 },
+  liveBtnTextActive: { color: '#ff6666' },
+  coordText: { color: 'rgba(255,255,255,0.45)', fontSize: 11, marginTop: 6 },
+  mapModal: { flex: 1, backgroundColor: '#0a0a0a' },
+  mapHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#111',
+    borderBottomWidth: 1, borderBottomColor: '#222',
+  },
+  mapTitle: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  mapClose: { backgroundColor: 'rgba(255,42,42,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  mapCloseText: { color: '#ff5e5e', fontWeight: '700', fontSize: 12 },
+});
+
+// ── NetworkEntry component ─────────────────────────────────────────────────────
 
 function NetworkEntry({ index, network, onChange, onRemove, showRemove }) {
   const [showPass, setShowPass] = useState(false);
@@ -78,38 +263,48 @@ function NetworkEntry({ index, network, onChange, onRemove, showRemove }) {
           </TouchableOpacity>
         ))}
       </View>
+
+      {/* Per-network country section */}
+      <View style={styles.countrySeparator} />
+      <Text style={styles.countryLabel}>COUNTRY</Text>
+      <TextInput
+        style={[styles.input, { marginBottom: 6 }]}
+        placeholder="Country (e.g. United States)"
+        placeholderTextColor="rgba(255,255,255,0.3)"
+        value={network.country || ''}
+        onChangeText={v => onChange({ ...network, country: v })}
+      />
+      <TextInput
+        style={[styles.input, { marginBottom: 6 }]}
+        placeholder="2-letter code (e.g. US)"
+        placeholderTextColor="rgba(255,255,255,0.3)"
+        value={network.countryCode || ''}
+        onChangeText={v => onChange({ ...network, countryCode: v.toUpperCase() })}
+        maxLength={2}
+        autoCapitalize="characters"
+      />
+
+      <LocationPicker network={network} onChange={onChange} />
     </View>
   );
 }
 
+// ── HostScreen ────────────────────────────────────────────────────────────────
+
 export default function HostScreen() {
   const { walletAddress, connect, sendASX } = useWallet();
-  const [networks, setNetworks] = useState([{ ssid: '', password: '', encryption: 'WPA2' }]);
-  const [country, setCountry] = useState('');
-  const [countryCode, setCountryCode] = useState('');
-  const [detecting, setDetecting] = useState(false);
+  const [networks, setNetworks] = useState([{
+    ssid: '', password: '', encryption: 'WPA2',
+    country: '', countryCode: '', lat: null, lon: null,
+  }]);
   const [updating, setUpdating] = useState(false);
   const deviceIdRef = useRef(getDeviceId());
 
-  const handleDetectLocation = useCallback(async () => {
-    setDetecting(true);
-    try {
-      const geo = await geolocateSelf();
-      if (geo.country) {
-        setCountry(geo.country);
-        setCountryCode(geo.countryCode || '');
-      } else {
-        Alert.alert('Detection Failed', 'Could not detect location from IP (local network). Enter your country manually.');
-      }
-    } catch (e) {
-      Alert.alert('Detection Failed', e.message);
-    } finally {
-      setDetecting(false);
-    }
-  }, []);
-
   const handleAddNetwork = () => {
-    setNetworks(prev => [...prev, { ssid: '', password: '', encryption: 'WPA2' }]);
+    setNetworks(prev => [...prev, {
+      ssid: '', password: '', encryption: 'WPA2',
+      country: '', countryCode: '', lat: null, lon: null,
+    }]);
   };
 
   const handleRemoveNetwork = (index) => {
@@ -126,17 +321,18 @@ export default function HostScreen() {
       Alert.alert('Invalid', 'At least one network with SSID and Password is required.');
       return;
     }
-    if (!country.trim()) {
-      Alert.alert('Country Required', 'Please detect or enter your country so users can find your network.');
+    const missingCountry = valid.find(n => !n.country.trim());
+    if (missingCountry) {
+      Alert.alert('Country Required', `Please set a country for "${missingCountry.ssid || 'Network'}" so users can find it.`);
       return;
     }
     if (!walletAddress) {
-      Alert.alert('Wallet Required', 'Connect your Solana wallet to publish. Your wallet address will be shown as the tip address for your network.');
+      Alert.alert('Wallet Required', 'Connect your Solana wallet to publish.');
       return;
     }
     Alert.alert(
       'Confirm Publish',
-      `Publishing ${valid.length} network(s) costs ${PUBLISH_FEE_ASX.toLocaleString()} ASX.\n\nYour wallet address will be shown as the tip address on your network listing.\n\nApprove the transaction to continue.`,
+      `Publishing ${valid.length} network(s) costs ${PUBLISH_FEE_ASX.toLocaleString()} ASX.\n\nApprove the transaction to continue.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -145,8 +341,14 @@ export default function HostScreen() {
             setUpdating(true);
             try {
               await sendASX(TREASURY_WALLET, PUBLISH_FEE_ASX);
-              await updateHostSettings(deviceIdRef.current, valid, country.trim(), countryCode.trim().toUpperCase() || 'XX', walletAddress);
-              Alert.alert('Published!', `${valid.length} network(s) listed on the global Hotpot network in ${country}.\nYour wallet is set as the tip address.`);
+              // Use the country of the first valid network for legacy compat;
+              // per-network country is stored inside the networks array.
+              const primaryCountry = valid[0].country.trim();
+              const primaryCC = valid[0].countryCode.trim().toUpperCase() || 'XX';
+              await updateHostSettings(
+                deviceIdRef.current, valid, primaryCountry, primaryCC, walletAddress
+              );
+              Alert.alert('Published!', `${valid.length} network(s) listed on the global Hotpot network.`);
             } catch (e) {
               Alert.alert('Publish Failed', e.message || 'Transaction rejected or update failed.');
             } finally {
@@ -188,40 +390,10 @@ export default function HostScreen() {
             )}
           </View>
 
-          {/* Country section */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>YOUR LOCATION</Text>
-            <Text style={styles.cardHint}>Used to show your networks to nearby users.</Text>
-            <View style={styles.countryRow}>
-              <TextInput
-                style={[styles.input, { flex: 1, marginBottom: 0 }]}
-                placeholder="Country (e.g. United States)"
-                placeholderTextColor="rgba(255,255,255,0.3)"
-                value={country}
-                onChangeText={setCountry}
-              />
-              <TouchableOpacity style={styles.detectBtn} onPress={handleDetectLocation} disabled={detecting}>
-                {detecting
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={styles.detectBtnText}>📍 Detect</Text>
-                }
-              </TouchableOpacity>
-            </View>
-            <TextInput
-              style={[styles.input, { marginTop: 8, marginBottom: 0 }]}
-              placeholder="2-letter country code (e.g. US)"
-              placeholderTextColor="rgba(255,255,255,0.3)"
-              value={countryCode}
-              onChangeText={v => setCountryCode(v.toUpperCase())}
-              maxLength={2}
-              autoCapitalize="characters"
-            />
-          </View>
-
-          {/* Networks section */}
+          {/* Networks section — country card is now inside each NetworkEntry */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>WIFI NETWORKS</Text>
-            <Text style={styles.cardHint}>Share your hotspot credentials. Users auto-connect when in range.</Text>
+            <Text style={styles.cardHint}>Each network has its own country and location. Users auto-connect when in range.</Text>
 
             {networks.map((net, i) => (
               <NetworkEntry
@@ -277,14 +449,6 @@ const styles = StyleSheet.create({
   cardTitle: { color: '#ff2a2a', fontSize: 11, fontWeight: '800', letterSpacing: 1.5, marginBottom: 4 },
   cardHint: { color: 'rgba(255,255,255,0.4)', fontSize: 12, marginBottom: 16, lineHeight: 17 },
 
-  countryRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  detectBtn: {
-    backgroundColor: 'rgba(255,42,42,0.2)', paddingHorizontal: 14,
-    paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,42,42,0.4)',
-  },
-  detectBtnText: { color: '#ff6666', fontWeight: '800', fontSize: 12 },
-  ccText: { color: '#ff9f1c', fontSize: 12, fontWeight: '700', marginTop: 8 },
-
   networkEntry: {
     backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 14,
     padding: 14, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(255,42,42,0.15)',
@@ -306,6 +470,9 @@ const styles = StyleSheet.create({
   encChipActive: { backgroundColor: 'rgba(255,159,28,0.2)', borderColor: '#ff9f1c' },
   encChipText: { color: 'rgba(255,255,255,0.5)', fontSize: 12, fontWeight: '700' },
   encChipTextActive: { color: '#ff9f1c' },
+
+  countrySeparator: { height: 1, backgroundColor: 'rgba(255,255,255,0.07)', marginVertical: 12 },
+  countryLabel: { color: '#ff2a2a', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 6 },
 
   addNetworkBtn: {
     borderWidth: 1, borderColor: 'rgba(255,42,42,0.3)', borderRadius: 12,
