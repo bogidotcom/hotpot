@@ -92,8 +92,8 @@ onUnmounted(() => {
           <a href="#radius" class="nav-link">Coverage</a>
           <a href="#pay" class="nav-link">Pricing</a>
           <a href="#earn" class="nav-link">Earn</a>
-          <a href="/downloads/hotpot.apk" target="_blank" class="nav-cta">
-            Join the Table
+          <a href="https://blog.assetux.com/?modal=subscribe" target="_blank" class="nav-cta">
+            Join Waitlist
           </a>
         </nav>
       </div>
@@ -117,13 +117,13 @@ onUnmounted(() => {
             table. Dip into thousands of hotspots across the cyberpunk city.
           </p>
           <div class="hero-actions">
-            <a href="/downloads/hotpot.apk" class="btn-download android">
+            <a href="https://blog.assetux.com/?modal=subscribe" class="btn-download android">
               <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
                 <path
                   d="M17.523 15.3414C17.0673 15.3414 16.6909 14.9651 16.6909 14.5093C16.6909 14.0536 17.0673 13.6773 17.523 13.6773C17.9787 13.6773 18.355 14.0536 18.355 14.5093C18.355 14.9651 17.9787 15.3414 17.523 15.3414ZM6.47702 15.3414C6.01211 15.3414 5.64502 14.9744 5.64502 14.5093C5.64502 14.0445 6.01211 13.6773 6.47702 13.6773C6.94193 13.6773 7.30902 14.0445 7.30902 14.5093C7.30902 14.9744 6.94193 15.3414 6.47702 15.3414ZM17.886 10.4631L19.313 7.99131C19.4141 7.81648 19.3541 7.59296 19.1793 7.49187C19.0044 7.39078 18.7809 7.45071 18.6798 7.62554L17.235 10.1287C15.7196 9.43859 13.9314 9.04944 11.9997 9.04944C10.068 9.04944 8.27976 9.43859 6.76435 10.1287L5.31952 7.62554C5.21843 7.45071 4.99491 7.39078 4.82008 7.49187C4.64525 7.59296 4.58532 7.81648 4.68641 7.99131L6.11335 10.4631C3.15173 12.1092 1.11475 14.9602 1.00415 18.3553H22.9959C22.8853 14.9602 20.8483 12.1092 17.886 10.4631Z"
                 />
               </svg>
-              <span>Download for Android</span>
+              <span>Join Waitlist</span>
             </a>
             <a
               href="https://cyreneai.com/projects/hotpot"
@@ -232,7 +232,7 @@ onUnmounted(() => {
           hotspot — whatever is tipped. Claim directly to your Solana wallet, no
           middleman.
         </p>
-        <a href="/downloads/hotpot.apk" class="feature-badge glass">
+        <a href="https://blog.assetux.com/?modal=subscribe" class="feature-badge glass">
           Start Earning
         </a>
       </div>
