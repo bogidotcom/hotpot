@@ -97,9 +97,15 @@ function loadDB() {
   return { devices: {}, processedTxHashes: {}, hostSettings: {}, networkTreasuryASX: 0, vpnSessions: [] };
 }
 
+let _backupTimer = null;
 function saveDB(db) {
   fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+  // Debounce: upload 10 s after the last write burst
+  clearTimeout(_backupTimer);
+  _backupTimer = setTimeout(() => {
+    backupToPinata().catch(e => console.error('[Backup] Post-save upload failed:', e.message));
+  }, 10_000);
 }
 
 let db = loadDB();
@@ -888,6 +894,85 @@ app.get('/health', (_req, res) => {
     asxPriceUsd:         cachedAsxPriceUsd,
   });
 });
+
+// ── IPFS Backup (Pinata) ──────────────────────────────────────────────────────
+
+const PINATA_JWT = process.env.PINATA_JWT; // set in .env
+
+const BACKUP_LOG = path.join(__dirname, 'data', 'backup-log.json');
+
+function loadBackupLog() {
+  try {
+    if (fs.existsSync(BACKUP_LOG)) return JSON.parse(fs.readFileSync(BACKUP_LOG, 'utf-8'));
+  } catch {}
+  return { backups: [] };
+}
+
+async function backupToPinata() {
+  if (!PINATA_JWT) throw new Error('PINATA_JWT not set in .env');
+
+  const dbSnapshot = JSON.stringify(db, null, 2);
+  const timestamp  = new Date().toISOString();
+
+  // Pinata pinFileToIPFS via multipart/form-data
+  const FormData  = (await import('node:stream')).Readable; // use built-in FormData (Node 18+)
+  const boundary  = `hotpot-backup-${Date.now()}`;
+  const filename  = `db-${timestamp.replace(/[:.]/g, '-')}.json`;
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/json\r\n\r\n`
+    ),
+    Buffer.from(dbSnapshot),
+    Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="pinataMetadata"\r\nContent-Type: application/json\r\n\r\n`),
+    Buffer.from(JSON.stringify({ name: filename, keyvalues: { app: 'hotpot', ts: timestamp } })),
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+
+  const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+    method:  'POST',
+    headers: {
+      'Authorization':  `Bearer ${PINATA_JWT}`,
+      'Content-Type':   `multipart/form-data; boundary=${boundary}`,
+      'Content-Length': String(body.length),
+    },
+    body,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Pinata error ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const cid  = data.IpfsHash;
+
+  // Append to backup log
+  const log = loadBackupLog();
+  log.backups.push({ ts: timestamp, cid, size: dbSnapshot.length });
+  // Keep last 50 entries
+  if (log.backups.length > 50) log.backups = log.backups.slice(-50);
+  fs.mkdirSync(path.dirname(BACKUP_LOG), { recursive: true });
+  fs.writeFileSync(BACKUP_LOG, JSON.stringify(log, null, 2));
+
+  console.log(`[Backup] Uploaded db.json → ipfs://${cid}`);
+  return { cid, ts: timestamp, size: dbSnapshot.length };
+}
+
+// Manual trigger — POST /api/admin/backup
+app.post('/api/admin/backup', async (req, res) => {
+  try {
+    const result = await backupToPinata();
+    res.json({ success: true, ...result, url: `https://gateway.pinata.cloud/ipfs/${result.cid}` });
+  } catch (err) {
+    console.error('[Backup]', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// List past backups — GET /api/admin/backups
+app.get('/api/admin/backups', (req, res) => {
+  const log = loadBackupLog();
+  res.json(log.backups.map(b => ({ ...b, url: `https://gateway.pinata.cloud/ipfs/${b.cid}` })));
+});
+
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
