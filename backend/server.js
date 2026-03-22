@@ -98,13 +98,16 @@ function loadDB() {
 }
 
 let _backupTimer = null;
+let _lastBackedUpHash = null;
 function saveDB(db) {
   fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-  // Debounce: upload 10 s after the last write burst
+  // Debounce: upload 10 s after the last write burst, only if content changed
   clearTimeout(_backupTimer);
   _backupTimer = setTimeout(() => {
-    backupToPinata().catch(e => console.error('[Backup] Post-save upload failed:', e.message));
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(DB_FILE)).digest('hex');
+    if (hash === _lastBackedUpHash) return;
+    backupToPinata(hash).catch(e => console.error('[Backup] Post-save upload failed:', e.message));
   }, 10_000);
 }
 
@@ -908,7 +911,7 @@ function loadBackupLog() {
   return { backups: [] };
 }
 
-async function backupToPinata() {
+async function backupToPinata(hash) {
   if (!PINATA_JWT) throw new Error('PINATA_JWT not set in .env');
 
   const dbSnapshot = JSON.stringify(db, null, 2);
@@ -952,6 +955,7 @@ async function backupToPinata() {
   fs.mkdirSync(path.dirname(BACKUP_LOG), { recursive: true });
   fs.writeFileSync(BACKUP_LOG, JSON.stringify(log, null, 2));
 
+  _lastBackedUpHash = hash ?? crypto.createHash('sha256').update(dbSnapshot).digest('hex');
   console.log(`[Backup] Uploaded db.json → ipfs://${cid}`);
   return { cid, ts: timestamp, size: dbSnapshot.length };
 }
