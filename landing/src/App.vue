@@ -179,12 +179,6 @@ onUnmounted(() => {
             <div class="stat-lbl">Coverage</div>
             <div class="stat-detail">network area</div>
           </div>
-          <div class="stat-card glass">
-            <div class="stat-emoji">📡</div>
-            <div class="stat-val">{{ formattedHotspots }}</div>
-            <div class="stat-lbl">Hotpots</div>
-            <div class="stat-detail">active nodes</div>
-          </div>
         </div>
       </div>
     </section>
