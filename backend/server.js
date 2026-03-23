@@ -27,9 +27,8 @@ const RPC_URL        = process.env.RPC_URL
   || 'https://api.mainnet-beta.solana.com';
 const NETSEPIO_BASE  = 'https://gateway.netsepio.com/api/v1.0';
 
-// DexScreener pool address for ASX/SOL pricing
-const DEXSCREENER_PAIR = 'haif1csuuvcggq4syudzqdtvz1esyxjuiw9y3jk7av55';
-const DEXSCREENER_URL  = `https://api.dexscreener.com/latest/dex/pairs/solana/${DEXSCREENER_PAIR}`;
+// GeckoTerminal pool API for ASX/USD pricing
+const GECKO_POOL_URL = 'https://api.geckoterminal.com/api/v2/networks/solana/pools/HaiF1CsuuVCGGQ4syuDZqdtVz1ESyxjUiW9y3JK7Av55';
 
 // Pricing: 1 GB of VPN/hotspot data costs $0.10 USD worth of ASX
 const USD_PER_GB = 0.10;
@@ -44,16 +43,17 @@ async function fetchAsxRate() {
   const now = Date.now();
   if (now - lastRateFetch < RATE_CACHE_MS) return cachedAsxPriceUsd;
   try {
-    const res  = await fetch(DEXSCREENER_URL);
+    const res  = await fetch(GECKO_POOL_URL, { headers: { Accept: 'application/json' } });
     const data = await res.json();
-    const price = parseFloat(data?.pairs?.[0]?.priceUsd || data?.pair?.priceUsd || 0);
+
+    const price = parseFloat(parseFloat(data?.data?.attributes?.base_token_price_usd || 0).toFixed(8));
     if (price > 0) {
       cachedAsxPriceUsd = price;
       lastRateFetch     = now;
       console.log(`[Rate] ASX price updated: $${price}`);
     }
   } catch (err) {
-    console.warn('[Rate] DexScreener fetch failed:', err.message);
+    console.warn('[Rate] GeckoTerminal fetch failed:', err.message);
   }
   return cachedAsxPriceUsd;
 }
@@ -62,6 +62,8 @@ async function getAsxPerGb() {
   const rate = await fetchAsxRate();
   return USD_PER_GB / rate; // e.g. $0.10 / $0.001 = 100 ASX/GB
 }
+
+getAsxPerGb()
 
 function genKeys() {
 
