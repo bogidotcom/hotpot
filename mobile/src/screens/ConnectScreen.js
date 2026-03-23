@@ -107,11 +107,13 @@ export default function ConnectScreen() {
     if (asxBalance > 0) FileSystem.writeAsStringAsync(BALANCE_CACHE_URI, String(asxBalance)).catch(() => {});
   }, [asxBalance]);
 
-  // Reset and restore balance whenever the wallet address changes
+  // Restore balance whenever the wallet address changes
   useEffect(() => {
-    setAsxBalance(0);
-    FileSystem.writeAsStringAsync(BALANCE_CACHE_URI, '0').catch(() => {});
-    if (!walletAddress) return;
+    if (!walletAddress) {
+      setAsxBalance(0);
+      FileSystem.writeAsStringAsync(BALANCE_CACHE_URI, '0').catch(() => {});
+      return;
+    }
     fetchBalanceByWallet(walletAddress)
       .then(data => { if (data.found) setAsxBalance(data.balance ?? 0); })
       .catch(() => {});
@@ -145,9 +147,13 @@ export default function ConnectScreen() {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(40)).current;
 
-  // Load stable deviceId from FileSystem on mount
+  // Load stable deviceId from FileSystem on mount, then re-ping so balance loads correctly
   useEffect(() => {
-    getOrCreateDeviceId().then(id => { deviceIdRef.current = id; });
+    getOrCreateDeviceId().then(id => {
+      deviceIdRef.current = id;
+      // Re-ping now that deviceId is ready (first ping on mount may have had null deviceId)
+      if (walletAddress) sendPing();
+    });
   }, []);
 
   useEffect(() => {

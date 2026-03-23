@@ -20,6 +20,9 @@ export async function connectVpn(wgConfig) {
   if (Platform.OS !== 'android') {
     return { success: false, error: 'VPN only supported on Android' };
   }
+  if (!WireGuardModule) {
+    return { success: false, error: 'WireGuard native module not available' };
+  }
   try {
     await WireGuardModule.connect(wgConfig);
     return { success: true };
@@ -30,7 +33,7 @@ export async function connectVpn(wgConfig) {
 
 /** Stop the in-app WireGuard tunnel. */
 export async function disconnectVpn() {
-  if (Platform.OS !== 'android') return;
+  if (Platform.OS !== 'android' || !WireGuardModule) return;
   try {
     await WireGuardModule.disconnect();
   } catch { /* ignore */ }
@@ -38,7 +41,7 @@ export async function disconnectVpn() {
 
 /** Synchronous check: returns true if the service reports it is running. */
 export async function isVpnConnected() {
-  if (Platform.OS !== 'android') return false;
+  if (Platform.OS !== 'android' || !WireGuardModule) return false;
   try {
     return await WireGuardModule.isVpnConnected();
   } catch {
