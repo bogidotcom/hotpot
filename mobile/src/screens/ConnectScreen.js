@@ -37,8 +37,9 @@ import {
 } from '../utils/VpnManager';
 
 const TREASURY_WALLET = '6bvB3PTz48wozyPJeuTB77axexWu9MfUSjBYbQzEgK88';
-const BALANCE_CACHE_URI = FileSystem.documentDirectory + 'asx_balance.json';
-const DEVICE_ID_URI = FileSystem.documentDirectory + 'device_id.txt';
+const BALANCE_CACHE_URI  = FileSystem.documentDirectory + 'asx_balance.json';
+const DEVICE_ID_URI      = FileSystem.documentDirectory + 'device_id.txt';
+const SESSION_HISTORY_URI = FileSystem.documentDirectory + 'session_history.json';
 const { width, height } = Dimensions.get('window');
 const PING_INTERVAL_MS = 60_000;
 const STATS_POLL_MS = 15_000;
@@ -60,6 +61,14 @@ async function copyToClipboard(text) {
   await Clipboard.setStringAsync(text);
 }
 
+
+function formatDuration(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
 
 function shortenAddress(addr) {
   if (!addr) return '';
@@ -97,6 +106,14 @@ export default function ConnectScreen() {
   const [vpnDataGB, setVpnDataGB] = useState(0);
   const [asxBalance, setAsxBalance] = useState(0);
 
+  // Session tracking
+  const [sessionHistory, setSessionHistory] = useState([]);
+  const [sessionElapsed, setSessionElapsed] = useState(0);   // seconds, ticked while VPN on
+  const [showSessionHistory, setShowSessionHistory] = useState(false);
+  const sessionStartTimeRef    = useRef(null); // ms timestamp when VPN connected
+  const sessionStartBalanceRef = useRef(0);    // ASX balance at session start
+  const asxBalanceRef          = useRef(0);    // kept in sync for stale-closure reads
+
   // Persist balance across reloads (local cache)
   useEffect(() => {
     FileSystem.readAsStringAsync(BALANCE_CACHE_URI)
@@ -106,6 +123,27 @@ export default function ConnectScreen() {
   useEffect(() => {
     if (asxBalance > 0) FileSystem.writeAsStringAsync(BALANCE_CACHE_URI, String(asxBalance)).catch(() => {});
   }, [asxBalance]);
+
+  // Load session history from disk on mount
+  useEffect(() => {
+    FileSystem.readAsStringAsync(SESSION_HISTORY_URI)
+      .then(raw => setSessionHistory(JSON.parse(raw) || []))
+      .catch(() => {});
+  }, []);
+
+  // Keep asxBalanceRef in sync so stale VPN-status closures can read current balance
+  useEffect(() => { asxBalanceRef.current = asxBalance; }, [asxBalance]);
+
+  // Session timer — ticks every second while VPN is connected
+  useEffect(() => {
+    if (!vpnConnected) { setSessionElapsed(0); return; }
+    const interval = setInterval(() => {
+      if (sessionStartTimeRef.current) {
+        setSessionElapsed(Math.floor((Date.now() - sessionStartTimeRef.current) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [vpnConnected]);
 
   // Restore balance whenever the wallet address changes
   useEffect(() => {
@@ -458,14 +496,36 @@ export default function ConnectScreen() {
   useEffect(() => {
     const unsub = onVpnStatusChange((status) => {
       if (status === 'CONNECTED') {
-        vpnDataGBRef.current   = 0;
-        lastTotalGBRef.current = 0;
+        vpnDataGBRef.current         = 0;
+        lastTotalGBRef.current       = 0;
+        sessionStartTimeRef.current  = Date.now();
+        sessionStartBalanceRef.current = asxBalanceRef.current;
         setVpnConnected(true);
         setVpnDataGB(0);
         setVpnLoading(false);
       } else if (status === 'DISCONNECTED') {
         // Always report — this callback only fires when the service stops
         reportVpnDisconnect(deviceIdRef.current, vpnDataGBRef.current, null, null).catch(console.warn);
+
+        // Save completed session to history
+        if (sessionStartTimeRef.current) {
+          const endedAt = Date.now();
+          const completed = {
+            id:          endedAt,
+            startedAt:   sessionStartTimeRef.current,
+            endedAt,
+            durationSec: Math.floor((endedAt - sessionStartTimeRef.current) / 1000),
+            gbUsed:      vpnDataGBRef.current,
+            asxSpent:    Math.max(0, sessionStartBalanceRef.current - asxBalanceRef.current),
+          };
+          setSessionHistory(prev => {
+            const updated = [completed, ...prev].slice(0, 20);
+            FileSystem.writeAsStringAsync(SESSION_HISTORY_URI, JSON.stringify(updated)).catch(() => {});
+            return updated;
+          });
+          sessionStartTimeRef.current = null;
+        }
+
         setVpnConnected(false);
         vpnDataGBRef.current   = 0;
         lastTotalGBRef.current = 0;
@@ -674,6 +734,32 @@ export default function ConnectScreen() {
             </View>
           </View>
 
+          {/* ── Active session panel (shown while VPN connected) ── */}
+          {vpnConnected && (
+            <View style={styles.sessionPanel}>
+              <View style={styles.sessionLiveDot} />
+              <Text style={styles.sessionLiveLabel}>LIVE SESSION</Text>
+              <View style={styles.sessionRow}>
+                <View style={styles.sessionItem}>
+                  <Text style={styles.sessionValue}>{formatDuration(sessionElapsed)}</Text>
+                  <Text style={styles.sessionLabel}>Duration</Text>
+                </View>
+                <View style={styles.sessionDivider} />
+                <View style={styles.sessionItem}>
+                  <Text style={[styles.sessionValue, { color: '#ff9f1c' }]}>
+                    {Math.max(0, sessionStartBalanceRef.current - asxBalance).toFixed(2)}
+                  </Text>
+                  <Text style={styles.sessionLabel}>ASX Spent</Text>
+                </View>
+                <View style={styles.sessionDivider} />
+                <View style={styles.sessionItem}>
+                  <Text style={styles.sessionValue}>{vpnDataGB.toFixed(3)}</Text>
+                  <Text style={styles.sessionLabel}>GB Used</Text>
+                </View>
+              </View>
+            </View>
+          )}
+
           {error && (
             <View style={styles.errorBanner}>
               <Text style={styles.errorText}>⚠️ {error}</Text>
@@ -717,6 +803,41 @@ export default function ConnectScreen() {
             {connected ? 'You are sharing the meal · ' : 'Tap to add ingredients · '}
             {vpnConnected ? 'VPN Active' : 'VPN Offline'}
           </Text>
+
+          {/* ── Session history ── */}
+          {sessionHistory.length > 0 && (
+            <>
+              <TouchableOpacity
+                style={styles.historyToggle}
+                onPress={() => setShowSessionHistory(p => !p)}
+              >
+                <Text style={styles.historyToggleText}>
+                  {showSessionHistory ? '▲' : '▼'} Sessions ({sessionHistory.length})
+                </Text>
+              </TouchableOpacity>
+              {showSessionHistory && (
+                <View style={styles.historyList}>
+                  {sessionHistory.slice(0, 5).map(s => (
+                    <View key={s.id} style={styles.historyRow}>
+                      <Text style={styles.historyTime}>
+                        {new Date(s.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                      <Text style={styles.historyDuration}>{formatDuration(s.durationSec)}</Text>
+                      <Text style={styles.historySpent}>-{s.asxSpent.toFixed(2)} ASX</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </>
+          )}
+
+          <TouchableOpacity
+            style={styles.buyHotpotBtn}
+            onPress={() => Linking.openURL('https://exchange.assetux.com/?fromChain=SOL&toChain=SOL&fromToken=SOL&toToken=HOTPOT&amount=1')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.buyHotpotText}>🍲 Buy HOTPOT</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity style={styles.termsLink} onPress={() => Linking.openURL('https://assetux.gitbook.io/assetux/legal/terms-of-use')}>
             <Text style={styles.termsText}>Kitchen Rules (T&C)</Text>
@@ -1144,6 +1265,26 @@ const styles = StyleSheet.create({
   connectText: { color: '#fff', fontSize: 16, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' },
   connectHint: { color: 'rgba(255,255,255,0.6)', fontSize: 13, marginTop: 20, fontWeight: '500' },
 
+  buyHotpotBtn: {
+    marginTop: 24,
+    paddingVertical: 16,
+    paddingHorizontal: 48,
+    borderRadius: 16,
+    backgroundColor: '#ff4500',
+    alignItems: 'center',
+    shadowColor: '#ff4500',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  buyHotpotText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
   termsLink: { marginTop: 24, paddingVertical: 10 },
   termsText: { color: '#ff9f1c', fontSize: 11, textDecorationLine: 'underline', fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase' },
   topUpBtn: { marginTop: 10, backgroundColor: '#32CD32', paddingVertical: 5, paddingHorizontal: 14, borderRadius: 8 },
@@ -1231,4 +1372,50 @@ const styles = StyleSheet.create({
   },
   qrSsid: { color: '#fff', fontWeight: '800', fontSize: 15, marginBottom: 6 },
   qrPass: { color: 'rgba(255,255,255,0.6)', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', fontSize: 13, marginBottom: 16 },
+
+  // Session panel (active)
+  sessionPanel: {
+    width: '100%', backgroundColor: 'rgba(50,205,50,0.08)',
+    borderRadius: 16, padding: 14, marginBottom: 16,
+    borderWidth: 1, borderColor: 'rgba(50,205,50,0.35)',
+    alignItems: 'center',
+  },
+  sessionLiveDot: {
+    position: 'absolute', top: 10, right: 12,
+    width: 8, height: 8, borderRadius: 4, backgroundColor: '#32CD32',
+  },
+  sessionLiveLabel: {
+    color: '#32CD32', fontSize: 9, fontWeight: '900', letterSpacing: 2,
+    marginBottom: 10, textTransform: 'uppercase',
+  },
+  sessionRow: { flexDirection: 'row', width: '100%', justifyContent: 'space-around', alignItems: 'center' },
+  sessionItem: { alignItems: 'center', flex: 1 },
+  sessionValue: {
+    color: '#fff', fontSize: 18, fontWeight: '900',
+    fontFamily: Platform.OS === 'ios' ? 'Courier-Bold' : 'monospace',
+    fontVariant: ['tabular-nums'],
+  },
+  sessionLabel: { color: 'rgba(255,255,255,0.45)', fontSize: 9, fontWeight: '700', marginTop: 3, textTransform: 'uppercase', letterSpacing: 0.5 },
+  sessionDivider: { width: 1, height: 32, backgroundColor: 'rgba(255,255,255,0.1)' },
+
+  // Session history
+  historyToggle: { paddingVertical: 8, paddingHorizontal: 4, marginBottom: 4, alignItems: 'center' },
+  historyToggleText: { color: 'rgba(255,255,255,0.35)', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
+  historyList: {
+    width: '100%', backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 12, overflow: 'hidden', marginBottom: 16,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+  },
+  historyRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  historyTime: { color: 'rgba(255,255,255,0.45)', fontSize: 11, flex: 1 },
+  historyDuration: {
+    color: '#fff', fontSize: 12, fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontVariant: ['tabular-nums'],
+  },
+  historySpent: { color: '#ff9f1c', fontSize: 12, fontWeight: '800', marginLeft: 12, fontVariant: ['tabular-nums'] },
 });

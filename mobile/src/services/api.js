@@ -318,6 +318,34 @@ export async function claimEarnings(deviceId, walletAddress) {
   return res.json();
 }
 
+// ── Live location ─────────────────────────────────────────────────────────────
+
+export async function updateLiveLocation(deviceId, ssid, lat, lon, walletAddress) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/hotspot/live`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, ssid, lat, lon, walletAddress: walletAddress || null }),
+  });
+  if (!res.ok) throw new Error(`Live location error: ${res.status}`);
+  return res.json();
+}
+
+export async function removeLiveLocation(deviceId, ssid) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/hotspot/live`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, ssid: ssid || null }),
+  });
+  if (!res.ok) throw new Error(`Remove live error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchLiveLocations() {
+  const res = await fetchWithTimeout(`${API_BASE}/api/hotspot/live`);
+  if (!res.ok) throw new Error(`Fetch live error: ${res.status}`);
+  return res.json();
+}
+
 // reportPay is a fire-and-forget analytics stub
 export async function reportPay(amount) {
   try {

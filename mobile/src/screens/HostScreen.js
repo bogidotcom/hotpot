@@ -17,7 +17,7 @@ import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { updateHostSettings } from '../services/api';
+import { updateHostSettings, updateLiveLocation, removeLiveLocation } from '../services/api';
 import { useWallet } from '../utils/WalletContext';
 
 const TREASURY_WALLET = '6bvB3PTz48wozyPJeuTB77axexWu9MfUSjBYbQzEgK88';
@@ -89,7 +89,7 @@ if(navigator.geolocation){
 
 // ── Per-network location picker component ─────────────────────────────────────
 
-function LocationPicker({ network, onChange }) {
+function LocationPicker({ network, onChange, deviceId, walletAddress }) {
   const [mapVisible, setMapVisible] = useState(false);
   const [liveTracking, setLiveTracking] = useState(false);
   const liveSubRef = useRef(null);
@@ -101,7 +101,10 @@ function LocationPicker({ network, onChange }) {
       liveSubRef.current = null;
     }
     setLiveTracking(false);
-  }, []);
+    if (deviceId && network.ssid) {
+      removeLiveLocation(deviceId, network.ssid).catch(() => {});
+    }
+  }, [deviceId, network.ssid]);
 
   const toggleLive = useCallback(async () => {
     if (liveTracking) { stopLive(); return; }
@@ -116,10 +119,14 @@ function LocationPicker({ network, onChange }) {
       (pos) => {
         const { latitude: lat, longitude: lon } = pos.coords;
         onChange({ ...network, lat, lon });
+        // Push live position to backend
+        if (deviceId && network.ssid) {
+          updateLiveLocation(deviceId, network.ssid, lat, lon, walletAddress).catch(() => {});
+        }
       }
     );
     liveSubRef.current = sub;
-  }, [liveTracking, network, onChange, stopLive]);
+  }, [liveTracking, network, onChange, stopLive, deviceId, walletAddress]);
 
   // Clean up live tracking when component unmounts
   useEffect(() => () => stopLive(), [stopLive]);
@@ -145,14 +152,6 @@ function LocationPicker({ network, onChange }) {
           onPress={() => setMapVisible(true)}
         >
           <Text style={locStyles.locateBtnText}>📍 Locate on Map</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[locStyles.liveBtn, liveTracking && locStyles.liveBtnActive]}
-          onPress={toggleLive}
-        >
-          <Text style={[locStyles.liveBtnText, liveTracking && locStyles.liveBtnTextActive]}>
-            {liveTracking ? '⏹ Stop Live' : '🛰 Share Live'}
-          </Text>
         </TouchableOpacity>
       </View>
       {hasLocation && (
@@ -216,7 +215,7 @@ const locStyles = StyleSheet.create({
 
 // ── NetworkEntry component ─────────────────────────────────────────────────────
 
-function NetworkEntry({ index, network, onChange, onRemove, showRemove }) {
+function NetworkEntry({ index, network, onChange, onRemove, showRemove, deviceId, walletAddress }) {
   const [showPass, setShowPass] = useState(false);
   return (
     <View style={styles.networkEntry}>
@@ -284,7 +283,7 @@ function NetworkEntry({ index, network, onChange, onRemove, showRemove }) {
         autoCapitalize="characters"
       />
 
-      <LocationPicker network={network} onChange={onChange} />
+      <LocationPicker network={network} onChange={onChange} deviceId={deviceId} walletAddress={walletAddress} />
     </View>
   );
 }
@@ -293,6 +292,7 @@ function NetworkEntry({ index, network, onChange, onRemove, showRemove }) {
 
 export default function HostScreen() {
   const { walletAddress, connect, sendASX } = useWallet();
+  // Expose walletAddress for LocationPicker props (passed via NetworkEntry)
   const [networks, setNetworks] = useState([{
     ssid: '', password: '', encryption: 'WPA2',
     country: '', countryCode: '', lat: null, lon: null,
@@ -403,6 +403,8 @@ export default function HostScreen() {
                 onChange={updated => handleChangeNetwork(i, updated)}
                 onRemove={() => handleRemoveNetwork(i)}
                 showRemove={networks.length > 1}
+                deviceId={deviceIdRef.current}
+                walletAddress={walletAddress}
               />
             ))}
 

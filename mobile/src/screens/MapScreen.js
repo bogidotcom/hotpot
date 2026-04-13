@@ -10,9 +10,10 @@ import {
   Platform,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { fetchNetworksJSON } from '../services/api';
+import { fetchNetworksJSON, fetchLiveLocations } from '../services/api';
 
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'https://api-hotpot.assetux.com';
+const API_BASE     = process.env.EXPO_PUBLIC_API_BASE || 'https://api-hotpot.assetux.com';
+const LIVE_POLL_MS = 10_000;
 
 // ── Build Leaflet HTML with network coverage circles ──────────────────────────
 
@@ -108,6 +109,32 @@ var bounds=${pinned.length > 0 ? `[${pinned.map(n=>`[${n.lat},${n.lon}]`).join('
 if(bounds&&bounds.length>0){
   try{map.fitBounds(bounds,{padding:[40,40],maxZoom:13});}catch(e){}
 }
+
+// ── Live marker support ───────────────────────────────────────────────────────
+var liveMarkers={};  // key: "deviceId:ssid"
+var liveCircles={};
+
+function updateLiveMarker(deviceId,ssid,lat,lon){
+  var key=deviceId+':'+ssid;
+  var liveIcon=L.divIcon({
+    html:'<div style="width:14px;height:14px;border-radius:50%;background:#ff9f1c;border:2px solid #fff;box-shadow:0 0 12px rgba(255,159,28,0.9);animation:pulse 1.5s infinite;"></div>',
+    iconSize:[14,14],iconAnchor:[7,7],className:''
+  });
+  if(liveMarkers[key]){
+    liveMarkers[key].setLatLng([lat,lon]);
+    liveCircles[key]&&liveCircles[key].setLatLng([lat,lon]);
+  }else{
+    liveCircles[key]=L.circle([lat,lon],{radius:200,color:'#ff9f1c',fillColor:'#ff9f1c',fillOpacity:0.15,weight:2,opacity:0.8}).addTo(map);
+    liveMarkers[key]=L.marker([lat,lon],{icon:liveIcon}).addTo(map);
+    liveMarkers[key].bindTooltip(ssid+' 🔴 LIVE',{permanent:false,direction:'top',offset:[0,-8]});
+  }
+}
+
+function removeLiveMarker(deviceId,ssid){
+  var key=deviceId+':'+ssid;
+  if(liveMarkers[key]){map.removeLayer(liveMarkers[key]);delete liveMarkers[key];}
+  if(liveCircles[key]){map.removeLayer(liveCircles[key]);delete liveCircles[key];}
+}
 <\/script></body></html>`;
 }
 
@@ -182,6 +209,25 @@ export default function MapScreen() {
   useEffect(() => {
     loadNetworks();
   }, [loadNetworks]);
+
+  // Poll live locations and update map markers via injectJavaScript
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const { live } = await fetchLiveLocations();
+        if (!webviewRef.current || !live) return;
+        const js = live.map(({ deviceId, ssid, lat, lon }) => {
+          const safeDeviceId = String(deviceId).replace(/'/g, "\\'");
+          const safeSsid     = String(ssid).replace(/'/g, "\\'");
+          return `updateLiveMarker('${safeDeviceId}','${safeSsid}',${lat},${lon});`;
+        }).join('');
+        if (js) webviewRef.current.injectJavaScript(js + ' true;');
+      } catch { /* non-critical */ }
+    };
+    const interval = setInterval(poll, LIVE_POLL_MS);
+    poll(); // immediate first run
+    return () => clearInterval(interval);
+  }, []);
 
   const handleWebViewMessage = useCallback((event) => {
     try {
